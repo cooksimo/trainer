@@ -6,6 +6,9 @@ module Trainer
 
     attr_accessor :raw_json
 
+    attr_accessor :test_summaries
+    attr_accessor :actions_invocation_record
+
     # Returns a hash with the path being the key, and the value
     # defining if the tests were successful
     def self.auto_convert(config)
@@ -56,7 +59,7 @@ module Trainer
         File.write(to_path, tp.to_junit)
         puts "Successfully generated '#{to_path}'"
 
-        return_hash[to_path] = tp.tests_successful?
+        return_hash[to_path] = tp.return_hash
       end
       return_hash
     end
@@ -67,6 +70,20 @@ module Trainer
 
       if File.directory?(path) && path.end_with?(".xcresult")
         parse_xcresult(path)
+
+        if config[:output_directory]
+          to_path = config[:output_directory]
+        else
+          to_path = File.dirname(path)
+        end
+
+        if config[:output_videos]
+          export_videos(path, to_path)
+        end
+
+        if config[:output_logs]
+          export_logs(path, to_path, config[:log_regex], config[:log_name])
+        end
       else
         self.file_content = File.read(path)
         self.raw_json = Plist.parse_xml(self.file_content)
@@ -86,6 +103,31 @@ module Trainer
     # @return [Bool] were all tests successful? Is false if at least one test failed
     def tests_successful?
       self.data.collect { |a| a[:number_of_failures] }.all?(&:zero?)
+    end
+
+    def return_hash
+      output = {}
+      output[:test_count] = self.data.map{ |a| a[:number_of_tests] }.inject(:+)
+      output[:failing_test_count] = self.data.map{ |a| a[:number_of_failures] }.inject(:+)
+      output[:passing_test_count] = output[:test_count] - output[:failing_test_count]
+
+      output[:failing_tests] = self.data.map { |a|
+        a[:tests] 
+      }.flatten.select { |a| 
+        a[:status] != "Success"
+      }.map { |a| 
+        { :identifier => a[:identifier].sub('.', '/').delete('()') } 
+      }
+
+      output[:passing_tests] = self.data.map { |a|
+        a[:tests] 
+      }.flatten.select { |a| 
+        a[:status] == "Success"
+      }.map { |a| 
+        { :identifier => a[:identifier].sub('.', '/').delete('()') } 
+      }
+
+      output
     end
 
     private
@@ -155,8 +197,8 @@ module Trainer
       result_bundle_object = JSON.parse(result_bundle_object_raw)
 
       # Parses JSON into ActionsInvocationRecord to find a list of all ids for ActionTestPlanRunSummaries
-      actions_invocation_record = Trainer::XCResult::ActionsInvocationRecord.new(result_bundle_object)
-      test_refs = actions_invocation_record.actions.map do |action|
+      self.actions_invocation_record = Trainer::XCResult::ActionsInvocationRecord.new(result_bundle_object)
+      test_refs = self.actions_invocation_record.actions.map do |action|
         action.action_result.tests_ref
       end.compact
       ids = test_refs.map(&:id)
@@ -171,16 +213,18 @@ module Trainer
 
       # Converts the ActionTestPlanRunSummaries to data for junit generator
       failures = actions_invocation_record.issues.test_failure_summaries || []
-      summaries_to_data(summaries, failures)
+
+      # Gets flat list of all ActionTestableSummary
+      all_summaries = summaries.map(&:summaries).flatten
+      self.test_summaries = all_summaries.map(&:testable_summaries).flatten
+
+      summaries_to_data(self.test_summaries, failures)
     end
 
     def summaries_to_data(summaries, failures)
-      # Gets flat list of all ActionTestableSummary
-      all_summaries = summaries.map(&:summaries).flatten
-      testable_summaries = all_summaries.map(&:testable_summaries).flatten
 
       # Maps ActionTestableSummary to rows for junit generator
-      rows = testable_summaries.map do |testable_summary|
+      rows = summaries.map do |testable_summary|
         all_tests = testable_summary.all_tests.flatten
 
         test_rows = all_tests.map do |test|
@@ -225,6 +269,72 @@ module Trainer
       end
 
       self.data = rows
+    end
+
+    def export_logs(path, output_base_path, log_regex = nil, filename)
+      log_refs = self.actions_invocation_record.actions.map do |action| 
+        action.action_result.log_ref 
+      end.flatten
+
+      ids = log_refs.map(&:id)
+
+      logs = ids.map do |id|
+        raw = execute_cmd("xcrun xcresulttool get --format json --path #{path} --id #{id}")
+        json = JSON.parse(raw)
+        Trainer::XCResult::ActivityLogSection.create(json)
+      end
+
+      all_test_logs = logs.map(&:all_test_logs).flatten
+      all_test_logs.each do |log|
+        lines = log.emitted_output.split("\n")
+
+        if !log_regex.nil?
+          lines = lines.select do |line| 
+            /#{log_regex}/ === line
+          end
+        end
+
+        test_name = "#{log.suite_name}-#{log.test_name}".delete('()')
+
+        output_path = "#{output_base_path}/#{log.result == "succeeded" ? "passing" : "failing"}/#{test_name}"
+        FileUtils.mkdir_p output_path
+
+        puts "Writing logs for #{test_name}..."
+        File.write("#{output_path}/#{filename.nil? ? "output.log" : filename}", lines.join("\n"))
+      end
+    end
+
+    def export_videos(path, output_base_path)
+      all_tests = self.test_summaries.map(&:all_tests).flatten
+
+      all_tests.each do |test|
+        test_name = "#{test.identifier.sub('/', '-').delete('()')}"
+
+        # Load the metadata for this test
+        id = test.summary_ref.id
+        raw = execute_cmd("xcrun xcresulttool get --format json --path #{path} --id #{id}")
+        json = JSON.parse(raw)
+        test_summary = Trainer::XCResult::ActionTestSummary.new(json, test)
+        all_attachments = test_summary.activity_summaries.map(&:all_attachments).flatten
+
+        Dir.mktmpdir do |dir|       
+          # Write all the attachments out to disk   
+          all_attachments.each do |attachment|
+            execute_cmd("xcrun xcresulttool export --path #{path} --output-path '#{dir}/#{attachment.filename}' --id #{attachment.payload_ref.id} --type file")
+          end
+          
+          ordered_names = all_attachments.map do |attachment| 
+            "#{dir}/#{attachment.filename}" 
+          end
+
+          output_path = "#{output_base_path}/#{test.test_status == "Success" ? "passing" : "failing"}/#{test_name}"
+          FileUtils.mkdir_p output_path
+
+          # Create a video from those attachments
+          puts "Generating video for #{test_name} from #{ordered_names.count} images..."
+          execute_cmd("cat #{ordered_names.join(' ')} | ffmpeg -hide_banner -loglevel panic -framerate 3 -f image2pipe  -i - #{output_path}/output.mp4")
+        end
+      end
     end
 
     # Convert the Hashes and Arrays in something more useful

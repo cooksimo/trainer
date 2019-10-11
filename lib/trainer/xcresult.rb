@@ -121,6 +121,200 @@ module Trainer
       end
     end
 
+    # - ActionTestSummary
+    # * Supertype: ActionTestSummaryIdentifiableObject
+    # * Kind: object
+    # * Properties:
+    #   + testStatus: String
+    #   + duration: Double
+    #   + performanceMetrics: [ActionTestPerformanceMetricSummary]
+    #   + failureSummaries: [ActionTestFailureSummary]
+    #   + activitySummaries: [ActionTestActivitySummary]
+    class ActionTestSummary < ActionTestSummaryIdentifiableObject
+      attr_accessor :test_status
+      attr_accessor :duration
+      attr_accessor :activity_summaries
+      def initialize(data, parent)
+        self.test_status = fetch_value(data, "testStatus")
+        self.duration = fetch_value(data, "duration")
+        self.activity_summaries = fetch_values(data, "activitySummaries").map do |summary_data|
+          ActionTestActivitySummary.new(summary_data)
+        end
+        super(data, parent)
+      end
+    end
+
+    # - ActionTestActivitySummary
+    # * Kind: object
+    # * Properties:
+    #   + title: String
+    #   + activityType: String
+    #   + uuid: String
+    #   + start: Date?
+    #   + finish: Date?
+    #   + attachments: [ActionTestAttachment]
+    #   + subactivities: [ActionTestActivitySummary]
+    class ActionTestActivitySummary < AbstractObject
+      attr_accessor :title
+      attr_accessor :activity_type
+      attr_accessor :uuid
+      attr_accessor :start
+      attr_accessor :finish
+      attr_accessor :attachments
+      attr_accessor :subactivities
+      def initialize(data)
+        self.title = fetch_value(data, "title")
+        self.activity_type = fetch_value(data, "activityType")
+        self.uuid = fetch_value(data, "uuid")
+        self.start = fetch_value(data, "start")
+        self.finish = fetch_value(data, "finish")
+        self.attachments = fetch_values(data, "attachments").map do |attachment_data|
+          ActionTestAttachment.new(attachment_data)
+        end
+        self.subactivities = fetch_values(data, "subactivities").map do |activity_data|
+          ActionTestActivitySummary.new(activity_data)
+        end
+        super
+      end
+
+      def all_attachments
+        return (attachments + subactivities.map(&:all_attachments)).flatten
+      end
+    end
+
+    # - ActionTestAttachment
+    # * Kind: object
+    # * Properties:
+    #   + uniformTypeIdentifier: String
+    #   + name: String?
+    #   + timestamp: Date?
+    #   + userInfo: SortedKeyValueArray?
+    #   + lifetime: String
+    #   + inActivityIdentifier: Int
+    #   + filename: String?
+    #   + payloadRef: Reference?
+    #   + payloadSize: Int
+    class ActionTestAttachment < AbstractObject
+      attr_accessor :uniform_type_identifier
+      attr_accessor :name
+      attr_accessor :timestamp
+      attr_accessor :lifetime
+      attr_accessor :in_activity_identifier
+      attr_accessor :filename
+      attr_accessor :payload_ref
+      attr_accessor :payload_size
+      def initialize(data)
+        self.uniform_type_identifier = fetch_value(data, "uniformTypeIdentifier")
+        self.name = fetch_value(data, "name")
+        self.timestamp = fetch_value(data, "timestamp")
+        self.lifetime = fetch_value(data, "lifetime")
+        self.in_activity_identifier = fetch_value(data, "inActivityIdentifier")
+        self.filename = fetch_value(data, "filename")
+        self.payload_ref = Reference.new(data["payloadRef"]) if data["payloadRef"]
+        self.payload_size = fetch_value(data, "payloadSize")
+        super
+      end
+    end
+
+    # - ActivityLogSection
+    # * Kind: object
+    # * Properties:
+    #   + domainType: String
+    #   + title: String
+    #   + startTime: Date?
+    #   + duration: Double
+    #   + result: String?
+    #   + subsections: [ActivityLogSection]
+    #   + messages: [ActivityLogMessage]
+    class ActivityLogSection < AbstractObject
+      attr_accessor :domain_type
+      attr_accessor :title
+      attr_accessor :start_time
+      attr_accessor :duration
+      attr_accessor :result
+      attr_accessor :subsections
+      def initialize(data)
+        self.domain_type = fetch_value(data, "domainType")
+        self.title = fetch_value(data, "title")
+        self.start_time = fetch_value(data, "startTime")
+        self.duration = fetch_value(data, "duration")
+        self.result = fetch_value(data, "result")
+        self.subsections = fetch_values(data, "subsections").map do |data|
+          ActivityLogSection.create(data)
+        end.compact
+        super
+      end
+
+      def self.create(data)
+        type = data["_type"]["_name"]
+        if type == "ActivityLogUnitTestSection"
+          return ActivityLogUnitTestSection.new(data)
+        elsif type == "ActivityLogMajorSection"
+          return ActivityLogMajorSection.new(data)
+        elsif type == "ActivityLogSection"
+          return ActivityLogSection.new(data)
+        else
+          puts "Warning: Unsupported type: #{type}"
+        end
+      end
+
+      # Returns all the ActivityLogUnitTestSection relevant to a specific test
+      def all_test_logs
+        return ([self] + subsections.map(&:all_test_logs)).flatten.select do |section|
+          section.class == Trainer::XCResult::ActivityLogUnitTestSection && !section.test_name.nil?
+        end
+      end
+    end
+
+    # - ActivityLogMajorSection
+    # * Supertype: ActivityLogSection
+    # * Kind: object
+    # * Properties:
+    #   + subtitle: String
+    class ActivityLogMajorSection < ActivityLogSection
+      attr_accessor :subtitle
+      def initialize(data)
+        self.subtitle = fetch_value(data, "subtitle")
+        super(data)
+      end
+    end
+
+
+    # - ActivityLogUnitTestSection
+    # * Supertype: ActivityLogSection
+    # * Kind: object
+    # * Properties:
+    #   + testName: String?
+    #   + suiteName: String?
+    #   + summary: String?
+    #   + emittedOutput: String?
+    #   + performanceTestOutput: String?
+    #   + testsPassedString: String?
+    #   + runnablePath: String?
+    #   + runnableUTI: String?
+    class ActivityLogUnitTestSection < ActivityLogSection
+      attr_accessor :test_name
+      attr_accessor :suite_name
+      attr_accessor :summary
+      attr_accessor :emitted_output
+      attr_accessor :performance_test_output
+      attr_accessor :tests_passed_string
+      attr_accessor :runnable_path
+      attr_accessor :runnable_uti
+      def initialize(data)
+        self.test_name = fetch_value(data, "testName")
+        self.suite_name = fetch_value(data, "suiteName")
+        self.summary = fetch_value(data, "summary")
+        self.emitted_output = fetch_value(data, "emittedOutput")
+        self.performance_test_output = fetch_value(data, "performanceTestOutput")
+        self.tests_passed_string = fetch_value(data, "testsPassedString")
+        self.runnable_path = fetch_value(data, "runnablePath")
+        self.runnable_uti = fetch_value(data, "runnableUTI")
+        super(data)
+      end
+    end
+
+
     # - ActionTestSummaryGroup
     #   * Supertype: ActionTestSummaryIdentifiableObject
     #   * Kind: object
@@ -156,12 +350,15 @@ module Trainer
     class ActionTestMetadata < ActionTestSummaryIdentifiableObject
       attr_accessor :test_status
       attr_accessor :duration
+      attr_accessor :summary_ref
       attr_accessor :performance_metrics_count
       attr_accessor :failure_summaries_count
       attr_accessor :activity_summaries_count
       def initialize(data, parent)
         self.test_status = fetch_value(data, "testStatus")
         self.duration = fetch_value(data, "duration").to_f
+        self.summary_ref = Reference.new(data["summaryRef"]) if data["summaryRef"]
+
         self.performance_metrics_count = fetch_value(data, "performanceMetricsCount")
         self.failure_summaries_count = fetch_value(data, "failureSummariesCount")
         self.activity_summaries_count = fetch_value(data, "activitySummariesCount")
