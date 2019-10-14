@@ -278,6 +278,8 @@ module Trainer
 
       ids = log_refs.map(&:id)
 
+      path = Shellwords.escape(path)
+
       logs = ids.map do |id|
         raw = execute_cmd("xcrun xcresulttool get --format json --path #{path} --id #{id}")
         json = JSON.parse(raw)
@@ -306,6 +308,8 @@ module Trainer
 
     def export_videos(path, output_base_path)
       all_tests = self.test_summaries.map(&:all_tests).flatten
+
+      path = Shellwords.escape(path)
 
       all_tests.each do |test|
         test_name = "#{test.identifier.sub('/', '-').delete('()')}"
