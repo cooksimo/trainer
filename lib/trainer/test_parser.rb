@@ -298,7 +298,10 @@ module Trainer
 
         test_name = "#{log.suite_name}-#{log.test_name}".delete('()')
 
-        output_path = "#{output_base_path}/#{log.result == "succeeded" ? "passing" : "failing"}/#{test_name}"
+        # Find out if the test passed
+        test = self.data.map { |item| item[:tests] }.flatten.select { |test| test[:identifier] == "#{log.suite_name}.#{log.test_name}" }.first
+
+        output_path = "#{output_base_path}/#{test[:status] == 'Success' ? "passing" : "failing"}/#{test_name}"
         FileUtils.mkdir_p output_path
 
         puts "Writing logs for #{test_name}..."
