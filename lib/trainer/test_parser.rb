@@ -319,7 +319,8 @@ module Trainer
         raw = execute_cmd("xcrun xcresulttool get --format json --path #{path} --id #{id}")
         json = JSON.parse(raw)
         test_summary = Trainer::XCResult::ActionTestSummary.new(json, test)
-        all_attachments = test_summary.activity_summaries.map(&:all_attachments).flatten
+        # Find all the image attachments
+        all_attachments = test_summary.activity_summaries.map(&:all_attachments).flatten.select { |item| item.uniform_type_identifier == 'public.jpeg' }
 
         Dir.mktmpdir do |dir|       
           # Write all the attachments out to disk   
