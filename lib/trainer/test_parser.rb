@@ -111,20 +111,33 @@ module Trainer
       output[:failing_test_count] = self.data.map{ |a| a[:number_of_failures] }.inject(:+)
       output[:passing_test_count] = output[:test_count] - output[:failing_test_count]
 
-      output[:failing_tests] = self.data.map { |a|
-        a[:tests] 
-      }.flatten.select { |a| 
-        a[:status] != "Success"
-      }.map { |a| 
-        { :identifier => a[:identifier].sub('.', '/').delete('()') } 
+      output[:failing_tests] = []
+      output[:passing_tests] = []
+
+      self.data.each { |target| 
+        row = target[:tests].select { |test|
+          test[:status] != "Success"
+        }.map { |test| 
+          { 
+            :identifier => test[:identifier].sub('.', '/').delete('()'),
+            :target => target[:target_name]
+          }
+        }
+
+        output[:failing_tests] += row
       }
 
-      output[:passing_tests] = self.data.map { |a|
-        a[:tests] 
-      }.flatten.select { |a| 
-        a[:status] == "Success"
-      }.map { |a| 
-        { :identifier => a[:identifier].sub('.', '/').delete('()') } 
+      self.data.each { |target| 
+        row = target[:tests].select { |test|
+          test[:status] == "Success"
+        }.map { |test| 
+          { 
+            :identifier => test[:identifier].sub('.', '/').delete('()'),
+            :target => target[:target_name]
+          }
+        }
+
+        output[:passing_tests] += row
       }
 
       output
@@ -314,9 +327,8 @@ module Trainer
 
       path = Shellwords.escape(path)
 
-      all_tests.each do |test|
+      all_tests.filter { |x| x.summary_ref != nil }.each do |test|
         test_name = "#{test.identifier.sub('/', '-').delete('()')}"
-
         # Load the metadata for this test
         id = test.summary_ref.id
         raw = execute_cmd("xcrun xcresulttool get --format json --path #{path} --id #{id}")
