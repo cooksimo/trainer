@@ -314,6 +314,12 @@ module Trainer
         # Find out if the test passed
         test = self.data.map { |item| item[:tests] }.flatten.select { |test| test[:identifier] == "#{log.suite_name}.#{log.test_name}" }.first
 
+        # Only output failing test logs, for now
+        if test[:status] == 'Success'
+          puts "Skipping #{test_name}"
+          next
+        end
+
         output_path = "#{output_base_path}/#{test[:status] == 'Success' ? "passing" : "failing"}/#{test_name}"
         FileUtils.mkdir_p output_path
 
@@ -324,10 +330,11 @@ module Trainer
 
     def export_videos(path, output_base_path)
       all_tests = self.test_summaries.map(&:all_tests).flatten
+      failing_tests = all_tests.filter { |test| test.test_status != 'Success' }
 
       path = Shellwords.escape(path)
 
-      all_tests.filter { |x| x.summary_ref != nil }.each do |test|
+      failing_tests.filter { |x| x.summary_ref != nil }.each do |test|
         test_name = "#{test.identifier.sub('/', '-').delete('()')}"
         # Load the metadata for this test
         id = test.summary_ref.id
